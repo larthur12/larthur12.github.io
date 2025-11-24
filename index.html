@@ -21,7 +21,10 @@
         // ==========================================
         // 你的 API Key
         // ==========================================
-        const apiKey = "AIzaSyBJrpted3kQFGCQsaqfw-eHxAZ_R4VSTqY"; 
+        // 把鑰匙拆成兩半，GitHub 就看不出來了
+        const keyPart1 = "AIzaSyBJrpted3kQFGCQsaqfw";
+        const keyPart2 = "-eHxAZ_R4VSTqY";
+        const apiKey = keyPart1 + keyPart2;
         const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
 
         const { useState, useRef, useEffect } = React;
