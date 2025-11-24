@@ -10,26 +10,26 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
-/* 全域禁止捲動彈性與縮放，解決 iPad 反白問題 /
+/* 全域樣式調整：保留 overscroll 控制與選取限制，允許正常捲動 */
 body {
-overscroll-behavior-y: none;
-touch-action: none;
--webkit-user-select: none; / Chrome/Safari /
--moz-user-select: none; / Firefox /
--ms-user-select: none; / IE10+ /
-user-select: none; / Standard /
--webkit-touch-callout: none; / 禁止 iOS 長按選單 */
+  overscroll-behavior-y: none;
+  /* touch-action: none;  // 刪除以恢復手勢捲動 */
+  -webkit-user-select: none; /* Chrome/Safari */
+  -moz-user-select: none; /* Firefox */
+  -ms-user-select: none; /* IE10+ */
+  user-select: none; /* Standard */
+  -webkit-touch-callout: none; /* 禁止 iOS 長按選單 */
+}
 
+/* 允許輸入框可以選取文字，解決文字模式無法輸入問題 */
+textarea, input {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
 
-    /* 允許輸入框可以選取文字，解決文字模式無法輸入問題 */
-    textarea, input {
-        -webkit-user-select: text;
-        user-select: text;
-        -webkit-touch-callout: default;
-    }
-
-    .no-scrollbar::-webkit-scrollbar { display: none; }
-    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 </style>
 
 
@@ -71,9 +71,12 @@ user-select: none; / Standard /
     const SYSTEM_PROMPT = `
     You are FlowMath, an expert Socratic Math Tutor.
     Goal: Help student solve math problems using Text Discussion + Handwriting Analysis.
-    [MODE 1: TEXT] Explain concepts simply. Use analogies.
-    [MODE 2: HANDWRITING] Analyze steps. Identify logical errors. Do NOT give answers directly. Ask guiding questions.
-    Keep responses concise (under 3 sentences).
+
+    RULES:
+    1. [IMPORTANT] Do NOT use LaTeX formatting (no $ symbols, no \\frac). Use plain text for math (e.g., use "1 + 1 = 2", "x^2", "sqrt(x)").
+    2. [MODE 1: TEXT] Explain concepts simply. Use analogies (apples, fingers) if the user is stuck.
+    3. [MODE 2: HANDWRITING] Analyze steps. Identify logical errors. Do NOT give answers directly. Ask guiding questions.
+    4. Keep responses concise (under 3 sentences).
     `;
 
     const FlowMathApp = () => {
@@ -94,6 +97,11 @@ user-select: none; / Standard /
         const dragStartY = useRef(0);
         const dragStartHeight = useRef(0);
         const savedCanvasDataRef = useRef(null);
+        const chatRef = useRef(null);
+        const pinchStartY = useRef(0);
+        const pinchStartHeight = useRef(0);
+
+        // 顯示全部訊息，允許使用者向上捲動查看紀錄
 
         const callGemini = async (inputPayload) => {
             if (!apiKey) return "請檢查 API Key";
@@ -182,6 +190,19 @@ user-select: none; / Standard /
 
         const handleDragEnd = () => { isDraggingPanel.current = false; };
 
+        // 兩指拖曳在畫布上調整高度
+        const handlePinchMove = (e) => {
+            if (!(e.touches && e.touches.length === 2) || !isDraggingPanel.current) return;
+            if (e.cancelable) e.preventDefault();
+            const t1 = e.touches[0], t2 = e.touches[1];
+            const avgY = (t1.clientY + t2.clientY) / 2;
+            const deltaY = pinchStartY.current - avgY;
+            const maxH = Math.floor(window.innerHeight * 0.85);
+            const newHeight = Math.min(Math.max(pinchStartHeight.current + deltaY, 200), maxH);
+            setPanelHeight(newHeight);
+        };
+        const handlePinchEnd = () => { isDraggingPanel.current = false; };
+
         useEffect(() => {
             if (appState !== 'chat' || inputMode !== 'canvas') return;
             const timer = setTimeout(() => {
@@ -221,6 +242,18 @@ user-select: none; / Standard /
             return () => clearTimeout(timer);
         }, [appState, inputMode, panelHeight, tool, brushColor]);
 
+        // 訊息更新時：僅在使用者接近底部時自動捲到底，避免打斷回看舊訊息
+        useEffect(() => {
+            const el = chatRef.current;
+            if (!el) return;
+            const t = setTimeout(() => {
+                const threshold = 120; // 底部門檻加大，減少誤觸自動捲動
+                const nearBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < threshold;
+                if (nearBottom) el.scrollTop = el.scrollHeight;
+            }, 0);
+            return () => clearTimeout(t);
+        }, [messages, isThinking, inputMode]);
+
         const getPos = (e) => {
             const rect = canvasRef.current.getBoundingClientRect();
             const cx = e.touches ? e.touches[0].clientX : e.clientX;
@@ -231,6 +264,15 @@ user-select: none; / Standard /
         const startDrawing = (e) => {
             // 在繪圖時明確阻止事件冒泡和預設行為
             if (e.cancelable) e.preventDefault();
+            // 兩指啟動時改為高度調整
+            if (e.touches && e.touches.length === 2) {
+                const t1 = e.touches[0], t2 = e.touches[1];
+                pinchStartY.current = (t1.clientY + t2.clientY) / 2;
+                pinchStartHeight.current = panelHeight;
+                isDraggingPanel.current = true;
+                setIsDrawing(false);
+                return;
+            }
             if (!ctxRef.current) return;
             ctxRef.current.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
             ctxRef.current.strokeStyle = brushColor;
@@ -316,6 +358,9 @@ user-select: none; / Standard /
             );
         }
 
+        // 動態計算聊天內容底部內距，避免輸入面板遮住內容
+        const bottomPadding = panelHeight + 20;
+
         return (
             <div className="flex flex-col h-full max-w-4xl mx-auto bg-white shadow-2xl relative">
                 <div className="px-6 py-4 border-b flex justify-between items-center bg-white z-20">
@@ -323,12 +368,14 @@ user-select: none; / Standard /
                     <button onClick={() => setAppState('setup')} className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">新題目</button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50 touch-pan-y" style={{ paddingBottom: panelHeight + 120 }}>
-                    <div className="bg-slate-100 p-4 rounded-xl border max-w-[90%]">
-                        <div className="text-xs text-slate-400 font-bold mb-2">CONTEXT</div>
-                        {problemContext.image && <img src={problemContext.image} className="max-w-full h-auto rounded mb-2 mix-blend-multiply"/>}
-                        <p className="whitespace-pre-wrap">{problemContext.text}</p>
-                    </div>
+                <div ref={chatRef} className="flex-1 min-h-0 overflow-y-auto p-6 space-y-6 bg-slate-50" style={{ paddingBottom: bottomPadding, touchAction: 'pan-y', overscrollBehavior: 'contain' }}>
+                    {messages.length === 0 && (
+                        <div className="bg-slate-100 p-4 rounded-xl border max-w-[90%]">
+                            <div className="text-xs text-slate-400 font-bold mb-2">CONTEXT</div>
+                            {problemContext.image && <img src={problemContext.image} className="max-w-full h-auto rounded mb-2 mix-blend-multiply"/>}
+                            <p className="whitespace-pre-wrap">{problemContext.text}</p>
+                        </div>
+                    )}
 
                     {messages.map(msg => (
                         <div key={msg.id} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}>
@@ -342,13 +389,16 @@ user-select: none; / Standard /
                     {isThinking && <div className="p-4 bg-white rounded-2xl rounded-tl-none shadow-sm w-16 flex gap-1"><div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce"/><div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce delay-75"/></div>}
                 </div>
 
-                <div className="absolute bottom-0 left-0 right-0 bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.1)] rounded-t-3xl z-30 flex flex-col" style={{ height: inputMode === 'canvas' ? panelHeight : 'auto' }}>
+                <div className="bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.1)] rounded-t-3xl z-30 flex flex-col flex-shrink-0 mt-auto" style={{ height: inputMode === 'canvas' ? panelHeight : 'auto' }}>
                     {inputMode === 'canvas' && (
-                        <div className="w-full h-8 flex justify-center items-center cursor-ns-resize touch-none"
+                        <div className="w-full h-14 flex justify-center items-center cursor-ns-resize touch-none"
                             onTouchStart={handleDragStart} onTouchMove={handleDragMove} onTouchEnd={handleDragEnd}
                             onMouseDown={handleDragStart} onMouseMove={handleDragMove} onMouseUp={handleDragEnd}
                         >
-                            <div className="w-12 h-1.5 bg-slate-300 rounded-full"/>
+                            <div className="flex items-center gap-3 text-slate-400 text-xs">
+                                <div className="w-16 h-1.5 bg-slate-300 rounded-full"/>
+                                <span>向上拖曳增高</span>
+                            </div>
                         </div>
                     )}
 
@@ -358,16 +408,14 @@ user-select: none; / Standard /
                             <button onClick={() => setInputMode('canvas')} className={`px-3 py-2 rounded-md text-sm font-bold flex gap-2 ${inputMode==='canvas'?'bg-white text-indigo-600 shadow-sm':'text-slate-400'}`}><Icon name="pen" size={16}/> 畫布</button>
                         </div>
                         {inputMode === 'canvas' && (
-                            <div className="flex gap-2">
+                            <div className="flex gap-2 items-center">
                                 <button onClick={() => {setTool('pen'); setBrushColor('#1e293b')}} className={`p-2 rounded-full ${tool==='pen'&&brushColor==='#1e293b'?'bg-slate-100 text-indigo-600':'text-slate-400'}`}><Icon name="pen" size={18}/></button>
                                 <button onClick={() => {setTool('pen'); setBrushColor('#ef4444')}} className={`p-2 rounded-full ${tool==='pen'&&brushColor==='#ef4444'?'bg-red-50 text-red-500':'text-slate-400'}`}><div className="w-4 h-4 bg-red-500 rounded-full"/></button>
                                 <button onClick={() => setTool('eraser')} className={`p-2 rounded-full ${tool==='eraser'?'bg-slate-100 text-indigo-600':'text-slate-400'}`}><Icon name="eraser" size={18}/></button>
                                 <button onClick={clearCanvas} className="p-2 text-slate-400 hover:text-red-500"><Icon name="refresh" size={18}/></button>
-                                <div className="ml-2 flex items-center gap-1 text-xs text-slate-500">
+                                <div className="ml-2 flex items-center gap-2 text-xs text-slate-500">
                                     <span className="hidden sm:inline">畫布高度</span>
-                                    <button onClick={() => setPanelHeight(240)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">S</button>
-                                    <button onClick={() => setPanelHeight(320)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">M</button>
-                                    <button onClick={() => setPanelHeight(480)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">L</button>
+                                    <input type="range" min="200" max={Math.floor(window.innerHeight*0.85)} value={panelHeight} onChange={(e)=>setPanelHeight(parseInt(e.target.value))} className="w-32"/>
                                 </div>
                             </div>
                         )}
@@ -378,7 +426,7 @@ user-select: none; / Standard /
                             <div className="absolute inset-0 opacity-20 pointer-events-none" style={{backgroundImage: 'radial-gradient(#94a3b8 1px, transparent 1px)', backgroundSize: '24px 24px'}}/>
                             <canvas ref={canvasRef} className="w-full h-full cursor-crosshair touch-none"
                                 onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing} onMouseLeave={stopDrawing}
-                                onTouchStart={startDrawing} onTouchMove={draw} onTouchEnd={stopDrawing}
+                                onTouchStart={startDrawing} onTouchMove={(e)=>{handlePinchMove(e); if(!isDraggingPanel.current) draw(e);}} onTouchEnd={(e)=>{handlePinchEnd(e); stopDrawing(e);}}
                             />
                             <button onClick={handleCheck} disabled={isThinking} className="absolute bottom-6 right-6 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold shadow-lg flex items-center gap-2 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400">
                                 {isThinking ? '思考中...' : <span>Check <Icon name="chevronRight" className="inline"/></span>}
